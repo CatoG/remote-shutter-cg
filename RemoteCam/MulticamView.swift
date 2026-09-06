@@ -285,18 +285,22 @@ struct MulticamView: View {
     private static let railClearance: CGFloat = 44 + 16
 
     /// Map a tap made over a mirrored preview back into true image
-    /// coordinates. Normalized, origin top-left, so only x flips.
-    static func unmirrored(_ point: CGPoint, if mirrored: Bool) -> CGPoint {
-        guard mirrored else { return point }
-        return CGPoint(x: 1 - point.x, y: point.y)
+    /// coordinates. Normalized, origin top-left, so each flipped axis is its
+    /// own subtraction from 1.
+    static func unmirrored(_ point: CGPoint,
+                           horizontally: Bool,
+                           vertically: Bool) -> CGPoint {
+        CGPoint(x: horizontally ? 1 - point.x : point.x,
+                y: vertically ? 1 - point.y : point.y)
     }
 
-    /// Mirror and flip, pinned to the bottom-trailing corner. Flip stays
-    /// outermost — it is the control the thumb reaches for — with mirror
-    /// inboard of it.
+    /// The two mirrors and the camera flip, pinned to the bottom-trailing
+    /// corner. Flip stays outermost — it is the control the thumb reaches for
+    /// — with the mirrors inboard of it, so adding one never moves the others.
     private var framingCorner: some View {
         HStack(spacing: 12) {
-            mirrorButton
+            mirrorVerticalButton
+            mirrorHorizontalButton
             CameraSwitchControlView(
                 control: .flipButton,
                 devices: [],
@@ -315,15 +319,30 @@ struct MulticamView: View {
     /// Flip the preview left-for-right. A monitor-side view transform: no
     /// command goes to the cameras, so it stays live even while a link is
     /// down, and it never changes what any camera records.
-    private var mirrorButton: some View {
+    private var mirrorHorizontalButton: some View {
         GlassCircleButton(
             systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right",
             size: 44, glyphSize: 20,
-            isActive: viewModel.mirrored,
+            isActive: viewModel.mirroredHorizontally,
             isEnabled: true,
             action: {
-                viewModel.mirrored.toggle()
-                logInfo("director: preview mirrored → \(viewModel.mirrored)")
+                viewModel.mirroredHorizontally.toggle()
+                logInfo("director: preview mirrored ↔ → \(viewModel.mirroredHorizontally)")
+            })
+    }
+
+    /// The same transform about the other axis — top-for-bottom. Its own
+    /// toggle rather than a shared cycle, so an upside-down camera can be
+    /// corrected with one press and left that way.
+    private var mirrorVerticalButton: some View {
+        GlassCircleButton(
+            systemImage: "arrow.up.and.down.righttriangle.up.righttriangle.down",
+            size: 44, glyphSize: 20,
+            isActive: viewModel.mirroredVertically,
+            isEnabled: true,
+            action: {
+                viewModel.mirroredVertically.toggle()
+                logInfo("director: preview mirrored ↕ → \(viewModel.mirroredVertically)")
             })
     }
 
@@ -435,7 +454,8 @@ struct MulticamView: View {
             ForEach(viewModel.lanes) { lane in
                 CameraTileView(lane: lane, isThumbnail: true,
                                aspectRatio: viewModel.rigSettings.aspectRatio,
-                               mirrored: viewModel.mirrored,
+                               mirroredHorizontally: viewModel.mirroredHorizontally,
+                               mirroredVertically: viewModel.mirroredVertically,
                                onRetry: { onRetryCollection(lane) })
                     .frame(height: cellHeight)
                     .onTapGesture {
@@ -465,17 +485,24 @@ struct MulticamView: View {
             ZStack {
                 LiveFrameView(frames: focused.frames,
                               aspectRatio: viewModel.rigSettings.aspectRatio,
-                              mirrored: viewModel.mirrored)
+                              mirroredHorizontally: viewModel.mirroredHorizontally,
+                              mirroredVertically: viewModel.mirroredVertically)
                 ViewfinderGestureLayer(
                     cameraImage: { focused.frames.cameraImage },
                     zoomScale: { focused.zoomScale },
                     currentZoomFactor: { focused.zoomFactor },
                     focusEnabled: focused.supportsFocusPoint,
                     // The gesture layer measures the untransformed view, so a
-                    // mirrored preview means the picture under the finger is at
-                    // the opposite x. Undo the flip before the point leaves the
-                    // screen; the camera only ever sees true image coordinates.
-                    onFocusTap: { onFocusTap(focused, Self.unmirrored($0, if: viewModel.mirrored)) },
+                    // mirrored preview puts the picture under the finger at the
+                    // opposite x, y, or both. Undo the flips before the point
+                    // leaves the screen; the camera only ever sees true image
+                    // coordinates.
+                    onFocusTap: {
+                        onFocusTap(focused,
+                                   Self.unmirrored($0,
+                                                   horizontally: viewModel.mirroredHorizontally,
+                                                   vertically: viewModel.mirroredVertically))
+                    },
                     onDoubleTap: { onFlipCamera(focused) },
                     onZoomChange: { onZoomChange(focused, $0) })
             }
@@ -612,7 +639,8 @@ struct CameraTileView: View {
     var aspectRatio: AspectRatio = .sixteenNine
     /// Draw the picture flipped, matching the focused viewfinder. Only the
     /// frame mirrors — the name chip, timer and status badge stay readable.
-    var mirrored: Bool = false
+    var mirroredHorizontally: Bool = false
+    var mirroredVertically: Bool = false
     /// Retry a failed footage collection for this lane (nil = not offered).
     var onRetry: (() -> Void)? = nil
 
@@ -641,7 +669,9 @@ struct CameraTileView: View {
 
     var body: some View {
         ZStack {
-            LiveFrameView(frames: lane.frames, aspectRatio: aspectRatio, mirrored: mirrored)
+            LiveFrameView(frames: lane.frames, aspectRatio: aspectRatio,
+                          mirroredHorizontally: mirroredHorizontally,
+                          mirroredVertically: mirroredVertically)
                 .clipShape(RoundedRectangle(cornerRadius: isThumbnail ? 10 : 0))
                 .saturation(lane.status == .linked ? 1 : 0)
 

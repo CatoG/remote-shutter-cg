@@ -809,11 +809,13 @@ struct MonitorTrayTile: View {
 struct LiveFrameView: View {
     @ObservedObject var frames: FrameDisplayModel
     let aspectRatio: AspectRatio
-    /// Draw the picture flipped left-for-right. Purely a display transform on
-    /// the monitor side — the camera's own preview, and everything it saves,
-    /// are untouched. Taps read through it, so any screen that turns this on
-    /// must mirror the focus point it sends (see `MulticamView`).
-    var mirrored: Bool = false
+    /// Draw the picture flipped left-for-right, top-for-bottom, or both.
+    /// Purely display transforms on the monitor side — the camera's own
+    /// preview, and everything it saves, are untouched. Taps read through
+    /// them, so any screen that turns one on must mirror the focus point it
+    /// sends (see `MulticamView.unmirrored`).
+    var mirroredHorizontally: Bool = false
+    var mirroredVertically: Bool = false
 
     var body: some View {
         if let image = frames.cameraImage {
@@ -827,7 +829,8 @@ struct LiveFrameView: View {
                         imageSize: image.size
                     )
                 )
-                .scaleEffect(x: mirrored ? -1 : 1, y: 1)
+                .scaleEffect(x: mirroredHorizontally ? -1 : 1,
+                             y: mirroredVertically ? -1 : 1)
         } else {
             // Placeholder until the first frame arrives.
             Rectangle()

@@ -82,10 +82,13 @@ final class MulticamViewModel: ObservableObject {
     @Published var mode: MonitorMode = .photo
     /// Focus (one viewfinder) vs grid (monitor wall) layout.
     @Published var displayMode: MulticamDisplayMode = .focus
-    /// Draw every preview flipped left-for-right. A monitor-side view
-    /// transform only: no command reaches the cameras, nothing recorded
-    /// changes, and it survives a dropped link because it never needed one.
-    @Published var mirrored: Bool = false
+    /// Draw every preview flipped left-for-right, top-for-bottom, or both.
+    /// Monitor-side view transforms only: no command reaches the cameras,
+    /// nothing recorded changes, and they survive a dropped link because they
+    /// never needed one. Both on is a 180° rotation — the useful setting for a
+    /// camera hanging upside down from a rig.
+    @Published var mirroredHorizontally: Bool = false
+    @Published var mirroredVertically: Bool = false
     /// Cameras discovered but not yet in the rig — the add-camera sheet's list.
     @Published var availablePeers: [MCPeerID] = []
     /// Whether the add-camera sheet is showing.
