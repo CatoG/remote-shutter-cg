@@ -33,38 +33,43 @@ jobs:
       # No provisioning profile, no signing identity — just the arm64 binary
       # and resources. Sideloadly (or any ad-hoc resigning tool) re-signs this
       # from scratch, so nothing here needs to be valid for on-device launch.
-      # `-destination generic/platform=iOS` (not `-sdk iphoneos`) is required:
-      # the RemoteCam scheme's app target implicitly embeds RemoteShutterWatch,
-      # and an under-specified `-sdk`-only build lets Xcode's dependency
-      # resolution pull in both the iOS and watchOS variants of the
-      # VideocallCodecs pod at once, which collide writing to the same
-      # derived-data path ("duplicate output file ... VideocallCodecs.framework
-      # ... in target 'VideocallCodecs-watchOS'") and fail the build. A generic
-      # iOS destination scopes dependency resolution to iOS only.
-      - name: Build RemoteShutter for iOS device (unsigned)
+      #
+      # `archive` (not `build`) is required: the RemoteCam scheme's app target
+      # implicitly embeds RemoteShutterWatch, and a plain `build` action of the
+      # combined graph lets Xcode's dependency resolution pull in both the iOS
+      # and watchOS variants of the VideocallCodecs pod at once, which collide
+      # writing to the same derived-data path ("duplicate output file ...
+      # VideocallCodecs.framework ... in target 'VideocallCodecs-watchOS'") and
+      # fail the build outright. `ios-ci.yml`'s own "Archive for Release" step
+      # builds this identical scheme (embedded Watch app included) unsigned via
+      # `archive` without hitting this — the archive action's per-platform
+      # product layout doesn't collide the way a plain build's shared derived
+      # data does.
+      - name: Archive RemoteShutter for iOS device (unsigned)
         run: |
           xcodebuild \
             -workspace RemoteShutter.xcworkspace \
             -scheme RemoteCam \
-            -configuration Debug \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath build \
+            -configuration Release \
+            -archivePath build/RemoteShutter.xcarchive \
+            archive \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_IDENTITY="" \
-            clean build
+            CODE_SIGN_IDENTITY=""
 
       # Sideloading tools expect the standard IPA shape: a zip containing a
       # top-level Payload/ folder with the .app bundle inside it. The product
       # is named RemoteShutter.app (the scheme is named RemoteCam, the target
-      # is not).
+      # is not). An unsigned archive's .app lives directly under
+      # Products/Applications — no -exportArchive (which needs real signing)
+      # required.
       - name: Package unsigned .ipa
         run: |
           set -e
-          APP_PATH=$(find build/Build/Products -maxdepth 2 -iname "RemoteShutter.app" -type d | head -1)
-          if [ -z "$APP_PATH" ]; then
-            echo "RemoteShutter.app not found under build/Build/Products" >&2
-            find build/Build/Products -maxdepth 2
+          APP_PATH="build/RemoteShutter.xcarchive/Products/Applications/RemoteShutter.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "RemoteShutter.app not found at $APP_PATH" >&2
+            find build/RemoteShutter.xcarchive/Products -maxdepth 3
             exit 1
           fi
           mkdir -p Payload
