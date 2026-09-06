@@ -80,8 +80,12 @@ final class MulticamViewModel: ObservableObject {
     /// `RecordingTimer` in the top bar. Nil unless recording.
     /// Photo vs video shutter mode.
     @Published var mode: MonitorMode = .photo
-    /// Focus (viewfinder + strip) vs grid (monitor wall) layout.
+    /// Focus (one viewfinder) vs grid (monitor wall) layout.
     @Published var displayMode: MulticamDisplayMode = .focus
+    /// Draw every preview flipped left-for-right. A monitor-side view
+    /// transform only: no command reaches the cameras, nothing recorded
+    /// changes, and it survives a dropped link because it never needed one.
+    @Published var mirrored: Bool = false
     /// Cameras discovered but not yet in the rig — the add-camera sheet's list.
     @Published var availablePeers: [MCPeerID] = []
     /// Whether the add-camera sheet is showing.

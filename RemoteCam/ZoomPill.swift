@@ -13,6 +13,12 @@ struct ZoomPill: View {
     /// Current zoom in hardware factors, as reported by the camera.
     let currentZoomFactor: CGFloat
     let onZoomChange: (CGFloat) -> Void
+    /// Which way the stops stack, and which way the ruler runs. The 1:1
+    /// monitor keeps the horizontal pill in its action column; the multicam
+    /// director rails it vertically on the trailing edge. Position 0 (widest)
+    /// sits at the leading end either way — left when horizontal, top when
+    /// vertical — so the stop order on screen matches the ruler's direction.
+    var axis: Axis = .horizontal
 
     @State private var isExpanded = false
     @State private var collapseWork: DispatchWorkItem?
@@ -26,8 +32,20 @@ struct ZoomPill: View {
     @State private var dragStartPosition: Double?
 
     private static let trackWidth: CGFloat = 240
-    private static let horizontalPadding: CGFloat = 14
+    /// Padding at each end of the pill, along whichever axis it runs.
+    private static let endPadding: CGFloat = 14
+    /// The pill's thickness across its axis: its height when horizontal, its
+    /// width when vertical.
     private static let height: CGFloat = 46
+    /// Room the vertical ruler leaves above the track for the value readout.
+    /// The horizontal pill stacks the same readout inside its 46pt height; a
+    /// vertical track has no spare thickness, so it grows instead.
+    private static let readoutAllowance: CGFloat = 22
+    /// The vertical rail's track. Deliberately shorter than the horizontal
+    /// one: a landscape iPhone leaves roughly 356pt of chrome height, and an
+    /// expanded rail has to stay clear of the framing controls in the bottom
+    /// corner. Shorter track, same range — each point of travel is worth more.
+    private static let verticalTrackLength: CGFloat = 180
     private static let stopDiameter: CGFloat = 32
     /// Gap between adjacent lens circles when collapsed. The stops sit in a tight
     /// cluster rather than spread along the track: a lens button is a *choice*,
@@ -54,12 +72,13 @@ struct ZoomPill: View {
                 stopRow
             }
         }
-        // Collapsed, the pill is only as wide as its lens circles; it grows to the
-        // full track only while the ruler is up. A fixed track-width capsule sat
-        // there at 268pt permanently, which is a lot of viewfinder to spend on
-        // three buttons.
-        .frame(width: isExpanded ? Self.trackWidth : collapsedWidth, height: Self.height)
-        .padding(.horizontal, Self.horizontalPadding)
+        // Collapsed, the pill is only as long as its lens circles; it grows to
+        // the full track only while the ruler is up. A fixed track-width capsule
+        // sat there at 268pt permanently, which is a lot of viewfinder to spend
+        // on three buttons.
+        .frame(width: axis == .horizontal ? expandedLength : Self.height,
+               height: axis == .horizontal ? Self.height : expandedLength)
+        .padding(axis == .horizontal ? .horizontal : .vertical, Self.endPadding)
         .background(glassBackground)
         // Scrolling over the pill zooms — reaching for the wheel is the reflex on a Mac.
         // Behind the content so it never intercepts the drag.
@@ -98,21 +117,43 @@ struct ZoomPill: View {
 
     // MARK: - Collapsed: the lens stops
 
+    @ViewBuilder
     private var stopRow: some View {
-        HStack(spacing: Self.stopSpacing) {
-            ForEach(scale.stops, id: \.self) { stop in
-                stopButton(stop)
-            }
+        if axis == .horizontal {
+            HStack(spacing: Self.stopSpacing) { stopButtons }
+        } else {
+            VStack(spacing: Self.stopSpacing) { stopButtons }
         }
     }
 
-    /// The cluster's intrinsic width, which the pill collapses to. Held as a
+    @ViewBuilder
+    private var stopButtons: some View {
+        ForEach(scale.stops, id: \.self) { stop in
+            stopButton(stop)
+        }
+    }
+
+    /// The cluster's intrinsic length, which the pill collapses to. Held as a
     /// number rather than left to `fit` so the capsule can animate between the
-    /// two widths.
-    private var collapsedWidth: CGFloat {
+    /// two lengths.
+    private var collapsedLength: CGFloat {
         let count = CGFloat(scale.stops.count)
         guard count > 0 else { return Self.stopDiameter }
         return count * Self.stopDiameter + (count - 1) * Self.stopSpacing
+    }
+
+    /// The ruler's length along the pill's own axis.
+    private var trackLength: CGFloat {
+        axis == .horizontal ? Self.trackWidth : Self.verticalTrackLength
+    }
+
+    /// The length the pill occupies along its axis right now. Expanded, the
+    /// vertical form also carries the readout the horizontal one hides inside
+    /// its thickness.
+    private var expandedLength: CGFloat {
+        guard isExpanded else { return collapsedLength }
+        return axis == .horizontal ? trackLength
+                                   : trackLength + Self.readoutAllowance
     }
 
     private func stopButton(_ stop: CGFloat) -> some View {
@@ -157,6 +198,8 @@ struct ZoomPill: View {
 
     // MARK: - Expanded: the ruler
 
+    /// The readout sits above the track on both axes: a vertical pill is only
+    /// 46pt wide, which is no room to put a value beside a 20pt track.
     private var ruler: some View {
         VStack(spacing: 4) {
             Text(scale.label(forHardware: displayedZoom))
@@ -164,29 +207,55 @@ struct ZoomPill: View {
                 .foregroundColor(.white)
                 .monospacedDigitIfAvailable()
 
-            ZStack(alignment: .leading) {
-                ticks
-                RoundedRectangle(cornerRadius: Self.thumbWidth / 2)
-                    .fill(AppTheme.accent)
-                    .frame(width: Self.thumbWidth, height: 20)
-                    .shadow(color: AppTheme.accent.opacity(0.5), radius: 3)
-                    .offset(x: offset(forHardware: displayedZoom, itemWidth: Self.thumbWidth))
-            }
-            .frame(width: Self.trackWidth, height: 20, alignment: .leading)
+            track
         }
     }
 
-    private var ticks: some View {
-        HStack(spacing: 0) {
-            ForEach(0..<Self.tickCount, id: \.self) { index in
-                let isStop = tickMarksAStop(index)
-                Rectangle()
-                    .fill(Color.white.opacity(isStop ? 0.9 : 0.3))
-                    .frame(width: isStop ? 2 : 1, height: isStop ? 16 : 8)
-                    .frame(maxWidth: .infinity)
+    @ViewBuilder
+    private var track: some View {
+        if axis == .horizontal {
+            ZStack(alignment: .leading) {
+                ticks
+                thumb.offset(x: offset(forHardware: displayedZoom, itemLength: Self.thumbWidth))
             }
+            .frame(width: trackLength, height: 20, alignment: .leading)
+        } else {
+            ZStack(alignment: .top) {
+                ticks
+                thumb.offset(y: offset(forHardware: displayedZoom, itemLength: Self.thumbWidth))
+            }
+            .frame(width: 20, height: trackLength, alignment: .top)
         }
-        .frame(width: Self.trackWidth)
+    }
+
+    private var thumb: some View {
+        RoundedRectangle(cornerRadius: Self.thumbWidth / 2)
+            .fill(AppTheme.accent)
+            .frame(width: axis == .horizontal ? Self.thumbWidth : 20,
+                   height: axis == .horizontal ? 20 : Self.thumbWidth)
+            .shadow(color: AppTheme.accent.opacity(0.5), radius: 3)
+    }
+
+    @ViewBuilder
+    private var ticks: some View {
+        if axis == .horizontal {
+            HStack(spacing: 0) { tickMarks }.frame(width: trackLength)
+        } else {
+            VStack(spacing: 0) { tickMarks }.frame(height: trackLength)
+        }
+    }
+
+    @ViewBuilder
+    private var tickMarks: some View {
+        ForEach(0..<Self.tickCount, id: \.self) { index in
+            let isStop = tickMarksAStop(index)
+            Rectangle()
+                .fill(Color.white.opacity(isStop ? 0.9 : 0.3))
+                .frame(width: axis == .horizontal ? (isStop ? 2 : 1) : (isStop ? 16 : 8),
+                       height: axis == .horizontal ? (isStop ? 16 : 8) : (isStop ? 2 : 1))
+                .frame(maxWidth: axis == .horizontal ? .infinity : nil,
+                       maxHeight: axis == .horizontal ? nil : .infinity)
+        }
     }
 
     /// True when a lens stop falls within half a tick of this tick, so detents read as
@@ -201,8 +270,8 @@ struct ZoomPill: View {
 
     // MARK: - Geometry
 
-    private func offset(forHardware hardware: CGFloat, itemWidth: CGFloat) -> CGFloat {
-        CGFloat(scale.position(forHardware: hardware)) * (Self.trackWidth - itemWidth)
+    private func offset(forHardware hardware: CGFloat, itemLength: CGFloat) -> CGFloat {
+        CGFloat(scale.position(forHardware: hardware)) * (trackLength - itemLength)
     }
 
     // MARK: - Interaction
@@ -226,7 +295,11 @@ struct ZoomPill: View {
                     dragStartPosition = start
                     isExpanded = true
                 }
-                let moved = start + Double(value.translation.width) / Double(Self.trackWidth)
+                // Travel runs along the pill's own axis; position 0 is at its
+                // leading end either way, so the maths is identical.
+                let travel = axis == .horizontal ? value.translation.width
+                                                 : value.translation.height
+                let moved = start + Double(travel) / Double(trackLength)
                 commit(scale.snappedToStop(scale.hardwareFactor(atPosition: moved)))
             }
             .onEnded { _ in

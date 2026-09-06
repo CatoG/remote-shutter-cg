@@ -9,22 +9,15 @@ import MPCCompat
 import SwiftUI
 
 /// The director screen in focus mode: the selected camera fills the viewfinder
-/// (reusing the 1:1 monitor's `LiveFrameView` so it looks and behaves the same)
-/// with a floating strip of the other cameras' live thumbnails. Grid mode is a
-/// later PR; this is the default surface.
+/// (reusing the 1:1 monitor's `LiveFrameView` so it looks and behaves the same),
+/// with the zoom stops railed on the trailing edge and the framing controls in
+/// the bottom-trailing corner. Grid mode is the monitor wall over the same
+/// chrome; it is the only surface that shows the rig's other cameras.
 struct MulticamView: View {
     @ObservedObject var viewModel: MulticamViewModel
 
-    /// Tap a thumbnail to make that camera the focused one.
+    /// Tap a grid tile to make that camera the focused one.
     let onFocusLane: (CameraLane) -> Void
-    /// The synced shutter — photo, or record start/stop depending on mode.
-    let onShutter: () -> Void
-    /// Toggle the shutter between photo and video mode.
-    let onToggleMode: () -> Void
-    /// "Add camera" tapped — the host decides paywall vs. the sheet.
-    let onAddCamera: () -> Void
-    /// Invite a discovered camera into the rig.
-    let onInviteCamera: (MCPeerID) -> Void
     /// Rig self-timer changed (seconds; 0 = off).
     let onSetTimer: (Int) -> Void
     /// Rig video quality picked (fans out to every lane).
@@ -48,9 +41,8 @@ struct MulticamView: View {
     /// Per-camera commands carry the lane they were rendered for — routing is
     /// a parameter of the command, never a stored register.
     let onFlipCamera: (CameraLane) -> Void
-    /// Torch / flash on the named camera (per-camera framing).
+    /// Torch on the named camera (per-camera framing).
     let onToggleTorch: (CameraLane) -> Void
-    let onToggleFlash: (CameraLane) -> Void
     /// Disconnect one camera from the rig (long-press → EndSession to it).
     let onDisconnectCamera: (CameraLane) -> Void
     /// Zoom the named camera (per-camera framing; throttled by the host).
@@ -79,10 +71,13 @@ struct MulticamView: View {
                 }
 
                 // Same chrome skeleton as the 1:1 monitor: a top bar, then the
-                // docked action cluster on the home-indicator edge. The camera
-                // strip is multicam's one added element, tucked above the
-                // action cluster in focus mode only.
+                // docked action cluster on the home-indicator edge. The zoom
+                // rail and the framing corner are laid over that skeleton
+                // rather than inside its column, so both stay pinned to the
+                // trailing edge whichever way the cluster docks.
                 chrome(dock: dock)
+                zoomRail(dock: dock)
+                framingCorner
                 countdownOverlay
                 transientErrorToast
                 if viewModel.showingRigTray { rigTrayLayer }
@@ -92,9 +87,6 @@ struct MulticamView: View {
                 #endif
             }
             .animation(.spring(response: 0.32, dampingFraction: 0.85), value: viewModel.showingRigTray)
-            .sheet(isPresented: $viewModel.showingAddCamera) {
-                AddCameraSheet(peers: viewModel.availablePeers, onInvite: onInviteCamera)
-            }
         }
         // Catalyst's default style paints a bordered box behind controls that
         // already draw their own shape. Not .plain — that also drops the
@@ -167,9 +159,9 @@ struct MulticamView: View {
         .padding(.bottom, 8)
     }
 
-    /// Back (leading) · focused link + camera chip · Spacer · flash/torch/tray,
-    /// with the recording timecode centered over it all — the same slots as
-    /// the monitor's `topBar`; the rig tray takes the settings glyph's place.
+    /// Back (leading) · focused link + camera chip · Spacer · torch/tray, with
+    /// the recording timecode centered over it all — the same slots as the
+    /// monitor's `topBar`; the rig tray takes the settings glyph's place.
     private var topBar: some View {
         ZStack {
             // Focus mode: the focused camera fills the screen, so its tile
@@ -196,14 +188,17 @@ struct MulticamView: View {
             focusedCameraChip
                 .padding(.leading, 8)
             Spacer(minLength: 0)
-            ControlCapsule(showsFlash: viewModel.mode == .photo,
+            // No flash: the director's capsule carries the torch and the tray
+            // only. The 1:1 monitor still shows flash — that is what the
+            // `showsFlash` slot is for.
+            ControlCapsule(showsFlash: false,
                            showsTorch: viewModel.showsTorchButton,
-                           isFlashEnabled: viewModel.focusedFlashOn,
-                           isFlashButtonEnabled: viewModel.focusedFlashEnabled,
+                           isFlashEnabled: false,
+                           isFlashButtonEnabled: false,
                            isTorchEnabled: viewModel.focusedTorchOn,
                            isTorchButtonEnabled: viewModel.focusedTorchEnabled,
                            isTrayOpen: viewModel.showingRigTray,
-                           onToggleFlash: withFocused(onToggleFlash),
+                           onToggleFlash: {},
                            onToggleTorch: withFocused(onToggleTorch),
                            onToggleTray: {
                                logInfo("director: rig tray opened")
@@ -228,82 +223,108 @@ struct MulticamView: View {
         }
     }
 
-    /// Portrait and other tall shapes: strip, then the action cluster and mode
-    /// selector stack across the bottom — the monitor's `bottomCluster`, with
-    /// the strip added above it.
+    /// Portrait and other tall shapes: the action cluster sits on the bottom
+    /// edge — the monitor's `bottomCluster`, now carrying the grid toggle
+    /// alone.
     private var bottomCluster: some View {
-        VStack(spacing: 14) {
-            if viewModel.displayMode == .focus { cameraStrip(axis: .horizontal) }
-            focusedZoomPill
-            actionCluster(axis: .horizontal)
-            modeSelector
-        }
-        .frame(maxWidth: .infinity)
+        actionCluster(axis: .horizontal)
     }
 
-    /// Wide shapes: the action cluster rides the docked rail; the strip and
-    /// mode selector sit inboard — the monitor's `sideCluster` shape.
+    /// Wide shapes: the action cluster rides the docked rail — the monitor's
+    /// `sideCluster` shape.
     private func sideCluster(onLeading: Bool) -> some View {
         HStack(alignment: .bottom, spacing: 16) {
-            if !onLeading { Spacer(minLength: 0) }
-            if onLeading { actionCluster(axis: .vertical) }
-
-            VStack(spacing: 10) {
+            if onLeading {
+                actionCluster(axis: .vertical)
                 Spacer(minLength: 0)
-                if viewModel.displayMode == .focus { cameraStrip(axis: .vertical) }
-                focusedZoomPill
-                modeSelector
-            }
-
-            if !onLeading { actionCluster(axis: .vertical) }
-            if onLeading { Spacer(minLength: 0) }
-        }
-    }
-
-    /// Grid toggle · shutter · flip — the monitor's gallery · shutter · switch
-    /// cluster, slot for slot. The gallery slot carries the grid toggle (the
-    /// only added glyph); the switch slot carries the focused-camera flip.
-    private func actionCluster(axis: Axis) -> some View {
-        let leading = gridToggleButton
-        let shutter = ShutterButton(
-            uiState: viewModel.mode == .video ? .videoMode : .photoMode,
-            isRecording: viewModel.isRecording,
-            activity: viewModel.isCapturing ? .capturing : nil,
-            isEnabled: viewModel.canFire,
-            action: onShutter)
-            .equatable()
-        let flip = CameraSwitchControlView(
-            control: .flipButton,
-            devices: [],
-            activeDeviceID: nil,
-            isEnabled: viewModel.focusedCameraCanFlip,
-            isSwitching: false,
-            onToggleCamera: withFocused(onFlipCamera),
-            onSelectCameraDevice: { _ in })
-            .equatable()
-
-        return Group {
-            if axis == .horizontal {
-                HStack(spacing: 40) { leading; shutter; flip }.frame(maxWidth: .infinity)
             } else {
-                VStack(spacing: 24) { leading; shutter; flip }.frame(maxHeight: .infinity)
+                Spacer(minLength: 0)
+                actionCluster(axis: .vertical)
             }
         }
     }
 
-    /// The focused camera's zoom pill — the monitor's `ZoomPill`, same
-    /// component and slot. Per-camera framing, so it shows in focus mode only,
-    /// and hides when the focused camera has no usable zoom range (a
+    /// The grid toggle, in the monitor's gallery slot. The shutter and the
+    /// camera-switch slots are gone from this cluster: the director does not
+    /// capture, and flip has moved to `framingCorner`.
+    private func actionCluster(axis: Axis) -> some View {
+        Group {
+            if axis == .horizontal {
+                gridToggleButton.frame(maxWidth: .infinity)
+            } else {
+                gridToggleButton.frame(maxHeight: .infinity)
+            }
+        }
+    }
+
+    /// The focused camera's zoom, railed vertically on the trailing edge and
+    /// centred over the picture. Per-camera framing, so it shows in focus mode
+    /// only, and hides when the focused camera has no usable zoom range (a
     /// fixed-focal-length camera, or before its first response), exactly as the
     /// 1:1 monitor does.
+    ///
+    /// On a trailing dock the action cluster already owns that edge, so the
+    /// rail steps inboard by one button plus the cluster's own gap rather than
+    /// stacking on top of it.
     @ViewBuilder
-    private var focusedZoomPill: some View {
+    private func zoomRail(dock: MonitorChromeDock) -> some View {
         if viewModel.displayMode == .focus && viewModel.showsFocusedZoomPill,
            let focused = viewModel.focusedLane {
             ZoomPill(scale: viewModel.focusedZoomScale,
                      currentZoomFactor: viewModel.focusedZoomFactor,
-                     onZoomChange: { onZoomChange(focused, $0) })
+                     onZoomChange: { onZoomChange(focused, $0) },
+                     axis: .vertical)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                .padding(.trailing, dock == .trailing ? Self.railClearance : 0)
+                .padding(.horizontal, 16)
         }
+    }
+
+    /// How far the zoom rail steps in when the action cluster rails on the same
+    /// edge: one 44pt control plus the `sideCluster` gap.
+    private static let railClearance: CGFloat = 44 + 16
+
+    /// Map a tap made over a mirrored preview back into true image
+    /// coordinates. Normalized, origin top-left, so only x flips.
+    static func unmirrored(_ point: CGPoint, if mirrored: Bool) -> CGPoint {
+        guard mirrored else { return point }
+        return CGPoint(x: 1 - point.x, y: point.y)
+    }
+
+    /// Mirror and flip, pinned to the bottom-trailing corner. Flip stays
+    /// outermost — it is the control the thumb reaches for — with mirror
+    /// inboard of it.
+    private var framingCorner: some View {
+        HStack(spacing: 12) {
+            mirrorButton
+            CameraSwitchControlView(
+                control: .flipButton,
+                devices: [],
+                activeDeviceID: nil,
+                isEnabled: viewModel.focusedCameraCanFlip,
+                isSwitching: false,
+                onToggleCamera: withFocused(onFlipCamera),
+                onSelectCameraDevice: { _ in })
+                .equatable()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+    }
+
+    /// Flip the preview left-for-right. A monitor-side view transform: no
+    /// command goes to the cameras, so it stays live even while a link is
+    /// down, and it never changes what any camera records.
+    private var mirrorButton: some View {
+        GlassCircleButton(
+            systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right",
+            size: 44, glyphSize: 20,
+            isActive: viewModel.mirrored,
+            isEnabled: true,
+            action: {
+                viewModel.mirrored.toggle()
+                logInfo("director: preview mirrored → \(viewModel.mirrored)")
+            })
     }
 
     /// Bind a per-camera action to the lane the control was rendered for.
@@ -312,8 +333,8 @@ struct MulticamView: View {
     }
 
     /// The grid toggle occupies the monitor's gallery slot. Shown only with
-    /// more than one camera; otherwise an empty 44pt frame keeps the shutter
-    /// centered, exactly as the monitor's hidden-control spacer does.
+    /// more than one camera; otherwise an empty 44pt frame holds the slot open,
+    /// exactly as the monitor's hidden-control spacer does.
     @ViewBuilder
     private var gridToggleButton: some View {
         if MultiCamChrome.showsGridToggle(cameraCount: viewModel.lanes.count) {
@@ -332,26 +353,8 @@ struct MulticamView: View {
         }
     }
 
-    /// PHOTO / VIDEO segmented capsule — the shared `CaptureModeSelector`.
-    /// Tapping the inactive segment flips the rig mode; disabled while
-    /// recording.
-    private var modeSelector: some View {
-        CaptureModeSelector(
-            segments: [
-                CaptureModeSelector.Segment(
-                    id: 0, title: NSLocalizedString("PHOTO", comment: "capture mode"),
-                    isActive: viewModel.mode != .video,
-                    action: { if viewModel.mode == .video { onToggleMode() } }),
-                CaptureModeSelector.Segment(
-                    id: 1, title: NSLocalizedString("VIDEO", comment: "capture mode"),
-                    isActive: viewModel.mode == .video,
-                    action: { if viewModel.mode != .video { onToggleMode() } }),
-            ],
-            isEnabled: !viewModel.isRecording)
-    }
-
     /// "Disconnect Camera" — a purposeful goodbye to one camera. Long-press on
-    /// the focused chip or any strip thumbnail.
+    /// the focused camera's name chip.
     private func disconnectButton(for lane: CameraLane) -> some View {
         Button(role: .destructive, action: { onDisconnectCamera(lane) }) {
             Label(NSLocalizedString("Disconnect Camera", comment: "remove one camera from the rig"),
@@ -432,6 +435,7 @@ struct MulticamView: View {
             ForEach(viewModel.lanes) { lane in
                 CameraTileView(lane: lane, isThumbnail: true,
                                aspectRatio: viewModel.rigSettings.aspectRatio,
+                               mirrored: viewModel.mirrored,
                                onRetry: { onRetryCollection(lane) })
                     .frame(height: cellHeight)
                     .onTapGesture {
@@ -459,13 +463,19 @@ struct MulticamView: View {
             // the 1:1 monitor's preview layer). Gestures address the focused
             // camera; in grid mode a tile tap focuses the lane instead.
             ZStack {
-                LiveFrameView(frames: focused.frames, aspectRatio: viewModel.rigSettings.aspectRatio)
+                LiveFrameView(frames: focused.frames,
+                              aspectRatio: viewModel.rigSettings.aspectRatio,
+                              mirrored: viewModel.mirrored)
                 ViewfinderGestureLayer(
                     cameraImage: { focused.frames.cameraImage },
                     zoomScale: { focused.zoomScale },
                     currentZoomFactor: { focused.zoomFactor },
                     focusEnabled: focused.supportsFocusPoint,
-                    onFocusTap: { onFocusTap(focused, $0) },
+                    // The gesture layer measures the untransformed view, so a
+                    // mirrored preview means the picture under the finger is at
+                    // the opposite x. Undo the flip before the point leaves the
+                    // screen; the camera only ever sees true image coordinates.
+                    onFocusTap: { onFocusTap(focused, Self.unmirrored($0, if: viewModel.mirrored)) },
                     onDoubleTap: { onFlipCamera(focused) },
                     onZoomChange: { onZoomChange(focused, $0) })
             }
@@ -479,53 +489,6 @@ struct MulticamView: View {
                         .font(.system(size: 44))
                         .foregroundColor(.white.opacity(0.5)))
                 .ignoresSafeArea(edges: Self.previewBleedEdges)
-        }
-    }
-
-    /// The camera strip — multicam's one added element. Thumbnails of the other
-    /// cameras plus the Add tile, laid out along `axis` so it tucks into the
-    /// action area on either dock. Tap a thumbnail to focus it; long-press for
-    /// "Disconnect Camera".
-    @ViewBuilder
-    private func cameraStrip(axis: Axis) -> some View {
-        let others = viewModel.otherLanes
-        let tile = CGSize(width: axis == .horizontal ? 72 : 96,
-                          height: axis == .horizontal ? 96 : 72)
-        Group {
-            if axis == .horizontal {
-                HStack(spacing: 8) { stripTiles(others, size: tile) }
-            } else {
-                VStack(spacing: 8) { stripTiles(others, size: tile) }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func stripTiles(_ others: [CameraLane], size: CGSize) -> some View {
-        ForEach(others) { lane in
-            CameraTileView(lane: lane, isThumbnail: true,
-                           aspectRatio: viewModel.rigSettings.aspectRatio,
-                           onRetry: { onRetryCollection(lane) })
-                .frame(width: size.width, height: size.height)
-                .onTapGesture { onFocusLane(lane) }
-                .contextMenu { disconnectButton(for: lane) }
-        }
-        addCameraTile.frame(width: size.width, height: size.height)
-    }
-
-    /// The "add camera" affordance at the end of the strip. The host decides
-    /// whether tapping opens the sheet or the paywall (at the tier cap).
-    private var addCameraTile: some View {
-        Button(action: onAddCamera) {
-            VStack(spacing: 6) {
-                Image(systemName: "plus.circle.fill").font(.title)
-                Text(NSLocalizedString("Add camera", comment: "add a camera to the multicam rig"))
-                    .font(.caption2)
-            }
-            .foregroundColor(.white)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.white.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
         }
     }
 }
@@ -647,6 +610,9 @@ struct CameraTileView: View {
     /// The rig's aspect ratio — the tile draws the same crop bars as the
     /// focused viewfinder, so every angle is judged against the real frame.
     var aspectRatio: AspectRatio = .sixteenNine
+    /// Draw the picture flipped, matching the focused viewfinder. Only the
+    /// frame mirrors — the name chip, timer and status badge stay readable.
+    var mirrored: Bool = false
     /// Retry a failed footage collection for this lane (nil = not offered).
     var onRetry: (() -> Void)? = nil
 
@@ -675,7 +641,7 @@ struct CameraTileView: View {
 
     var body: some View {
         ZStack {
-            LiveFrameView(frames: lane.frames, aspectRatio: aspectRatio)
+            LiveFrameView(frames: lane.frames, aspectRatio: aspectRatio, mirrored: mirrored)
                 .clipShape(RoundedRectangle(cornerRadius: isThumbnail ? 10 : 0))
                 .saturation(lane.status == .linked ? 1 : 0)
 
@@ -740,6 +706,11 @@ struct CameraTileView: View {
 /// Lists the cameras the director's browser has discovered but not yet added,
 /// so the user can invite them into the rig mid-session. Shown only below the
 /// tier cap (the host routes to the paywall at the cap).
+///
+/// Currently unpresented: the director screen has no add-camera affordance, so
+/// a rig is fixed once the scanner hands it over. The sheet is kept whole —
+/// `MulticamViewModel.availablePeers` is still filled — so restoring the
+/// entry point is a change to the chrome alone.
 struct AddCameraSheet: View {
     let peers: [MCPeerID]
     let onInvite: (MCPeerID) -> Void

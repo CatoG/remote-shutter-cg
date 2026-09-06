@@ -52,21 +52,6 @@ public final class MulticamViewController: UIViewController {
         let multicamView = MulticamView(
             viewModel: viewModel,
             onFocusLane: { [weak self] lane in self?.controller.setFocusedPeer(lane.peerID) },
-            onShutter: { [weak self] in self?.triggerShutter() },
-            onToggleMode: { [weak self] in
-                // The mode is frozen while a shot is in play — recording,
-                // collecting acks, or counting down. What you armed is what fires.
-                guard let self, !self.viewModel.isRecording, !self.viewModel.isCapturing,
-                      self.viewModel.rigSettings.countdown == nil else { return }
-                self.viewModel.mode = self.viewModel.mode == .photo ? .video : .photo
-                logInfo("director: mode → \(self.viewModel.mode)")
-            },
-            onAddCamera: { [weak self] in self?.handleAddCameraTapped() },
-            onInviteCamera: { [weak self] peer in
-                guard let self else { return }
-                self.viewModel.showingAddCamera = false
-                self.controller.inviteCamera(peer)
-            },
             onSetTimer: { [weak self] seconds in self?.controller.setRigTimer(seconds) },
             onSelectVideoQuality: { [weak self] res, fps in
                 self?.controller.setVideoQuality(resolution: res, frameRate: fps)
@@ -94,7 +79,6 @@ public final class MulticamViewController: UIViewController {
             onRetryCollection: { [weak self] lane in self?.controller.retryCollection(for: lane.peerID) },
             onFlipCamera: { [weak self] lane in self?.controller.flipCamera(lane.peerID) },
             onToggleTorch: { [weak self] lane in self?.controller.toggleTorch(on: lane.peerID) },
-            onToggleFlash: { [weak self] lane in self?.controller.toggleFlash(on: lane.peerID) },
             onDisconnectCamera: { [weak self] lane in self?.controller.disconnectCamera(lane.peerID) },
             onZoomChange: { [weak self] lane, factor in self?.handleZoomChange(factor, on: lane.peerID) },
             onFocusTap: { [weak self] lane, point in self?.handleFocusTap(point, on: lane.peerID) },
@@ -124,22 +108,6 @@ public final class MulticamViewController: UIViewController {
         navigationController?.setNavigationBarHidden(false, animated: animated)
     }
 
-    /// "Add camera" tapped: at the tier cap, route free users to the paywall
-    /// (the same Settings sheet every other gate uses); otherwise open the
-    /// discovered-cameras sheet.
-    private func handleAddCameraTapped() {
-        Task { @MainActor in
-            let count = await controller.cameraCount()
-            if count >= StoreManager.shared.maxCameras() {
-                logInfo("director: add camera tap → paywall (\(count) cameras, at tier cap)")
-                showPaywall()
-            } else {
-                logInfo("director: add camera tap → sheet")
-                viewModel.showingAddCamera = true
-            }
-        }
-    }
-
     /// Tap-to-focus on the camera the tap was rendered over. Gated behind its
     /// own entitlement (mirrors the 1:1); a locked user is routed to the
     /// paywall. The controller additionally drops the command if that peer
@@ -158,15 +126,6 @@ public final class MulticamViewController: UIViewController {
         let ctrl = UIHostingController(rootView: SettingsView())
         ctrl.modalPresentationStyle = .pageSheet
         present(ctrl, animated: true)
-    }
-
-    /// Route the shutter: a photo, or record start/stop, per the current mode.
-    private func triggerShutter() {
-        switch (viewModel.mode, viewModel.isRecording) {
-        case (.photo, _): controller.capturePhoto()
-        case (.video, false): controller.startRecording()
-        case (.video, true): controller.stopRecording()
-        }
     }
 
     /// Throttled zoom, the same leading+trailing pattern the 1:1 monitor uses
