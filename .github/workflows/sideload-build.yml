@@ -34,17 +34,21 @@ jobs:
       # and resources. Sideloadly (or any ad-hoc resigning tool) re-signs this
       # from scratch, so nothing here needs to be valid for on-device launch.
       #
-      # `archive` (not `build`) is required: the RemoteCam scheme's app target
-      # implicitly embeds RemoteShutterWatch, and a plain `build` action of the
-      # combined graph lets Xcode's dependency resolution pull in both the iOS
-      # and watchOS variants of the VideocallCodecs pod at once, which collide
-      # writing to the same derived-data path ("duplicate output file ...
-      # VideocallCodecs.framework ... in target 'VideocallCodecs-watchOS'") and
-      # fail the build outright. `ios-ci.yml`'s own "Archive for Release" step
-      # builds this identical scheme (embedded Watch app included) unsigned via
-      # `archive` without hitting this — the archive action's per-platform
-      # product layout doesn't collide the way a plain build's shared derived
-      # data does.
+      # The RemoteCam scheme's app target implicitly embeds RemoteShutterWatch,
+      # which pulls in the watchOS variant of the vendored VideocallCodecs
+      # xcframework pod alongside the iOS variant. Both pod targets' [CP] Copy
+      # XCFrameworks script phases are generated with the literal same
+      # templated output path (`${PODS_XCFRAMEWORKS_BUILD_DIR}/VideocallCodecs/
+      # VideocallCodecs.framework` — checked directly in
+      # Pods/Target Support Files/VideocallCodecs-{iOS,watchOS}/
+      # *-xcframeworks-output-files.xcfilelist), and something about this
+      # project's build-directory setup collapses their per-platform
+      # `$(EFFECTIVE_PLATFORM_NAME)` distinction for an iphoneos/device build,
+      # so the two collide as a duplicate output and hard-fail the whole build
+      # ("CreateBuildDirectory" abort, no clearer diagnostic). Overriding
+      # PODS_XCFRAMEWORKS_BUILD_DIR here — appending the platform name
+      # explicitly — forces the two pod targets apart regardless of whatever
+      # upstream xcconfig chain was collapsing them.
       - name: Archive RemoteShutter for iOS device (unsigned)
         run: |
           xcodebuild \
@@ -55,7 +59,8 @@ jobs:
             archive \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_IDENTITY=""
+            CODE_SIGN_IDENTITY="" \
+            'PODS_XCFRAMEWORKS_BUILD_DIR=$(PODS_CONFIGURATION_BUILD_DIR)/XCFrameworkIntermediates$(EFFECTIVE_PLATFORM_NAME)'
 
       # Sideloading tools expect the standard IPA shape: a zip containing a
       # top-level Payload/ folder with the .app bundle inside it. The product
