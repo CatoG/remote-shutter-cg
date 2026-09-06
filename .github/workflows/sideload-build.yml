@@ -8,6 +8,9 @@ name: Sideload Build (unsigned)
 #
 # Free-account installs expire after 7 days; re-run Sideloadly against the
 # same .ipa to re-sign and reinstall.
+#
+# The Apple Watch companion is deliberately NOT part of this build — see the
+# "Detach Watch companion" step.
 on:
   workflow_dispatch:
 
@@ -30,56 +33,78 @@ jobs:
         with:
           xcode-version: '26.2'
 
+      # The RemoteShutter app target explicitly depends on, and embeds,
+      # RemoteShutterWatch. That pulls the watchOS variant of the vendored
+      # VideocallCodecs xcframework pod into the same build as the iOS variant,
+      # and both pod targets' "[CP] Copy XCFrameworks" script phases declare
+      # the identical output path (confirmed in
+      # Pods/Target Support Files/VideocallCodecs-{iOS,watchOS}/
+      # *-xcframeworks-output-files.xcfilelist — both are literally
+      # "${PODS_XCFRAMEWORKS_BUILD_DIR}/VideocallCodecs/VideocallCodecs.framework",
+      # and both resolve under Products/<Config>-iphoneos). Xcode rejects the
+      # build plan outright:
+      #
+      #   error: Multiple commands produce '.../Debug-iphoneos/
+      #   XCFrameworkIntermediates/VideocallCodecs/VideocallCodecs.framework'
+      #
+      # A sideloaded phone build needs none of the Watch companion, so drop it
+      # from the graph rather than fighting the pod collision. Only the two
+      # array *references* are removed (they end in "*/,"); the object
+      # definitions stay behind, orphaned, which Xcode tolerates. This edits
+      # the ephemeral CI checkout only — nothing is committed.
+      - name: Detach Watch companion from the build graph
+        run: |
+          set -euo pipefail
+          PROJ=RemoteShutter.xcodeproj/project.pbxproj
+
+          embed='^[[:space:]]*66535847B5B066B3E542804A /\* Embed Watch Content \*/,$'
+          dep='^[[:space:]]*F9BE2447CA8A8A4E4BC91CD6 /\* PBXTargetDependency \*/,$'
+
+          # Fail loudly rather than silently building with the Watch app still
+          # attached if these UUIDs ever change.
+          for pattern in "$embed" "$dep"; do
+            if ! grep -qE "$pattern" "$PROJ"; then
+              echo "::error::Expected pbxproj reference not found ($pattern). The project layout changed — update this step." >&2
+              exit 1
+            fi
+          done
+
+          grep -vE "$embed" "$PROJ" > "$PROJ.tmp" && mv "$PROJ.tmp" "$PROJ"
+          grep -vE "$dep"   "$PROJ" > "$PROJ.tmp" && mv "$PROJ.tmp" "$PROJ"
+          echo "Watch companion detached from RemoteShutter target."
+
       # No provisioning profile, no signing identity — just the arm64 binary
       # and resources. Sideloadly (or any ad-hoc resigning tool) re-signs this
       # from scratch, so nothing here needs to be valid for on-device launch.
-      #
-      # The RemoteCam scheme's app target implicitly embeds RemoteShutterWatch,
-      # which pulls in the watchOS variant of the vendored VideocallCodecs
-      # xcframework pod alongside the iOS variant. Both pod targets' [CP] Copy
-      # XCFrameworks script phases are generated with the literal same
-      # templated output path (`${PODS_XCFRAMEWORKS_BUILD_DIR}/VideocallCodecs/
-      # VideocallCodecs.framework` — checked directly in
-      # Pods/Target Support Files/VideocallCodecs-{iOS,watchOS}/
-      # *-xcframeworks-output-files.xcfilelist), and something about this
-      # project's build-directory setup collapses their per-platform
-      # `$(EFFECTIVE_PLATFORM_NAME)` distinction for an iphoneos/device build,
-      # so the two collide as a duplicate output and hard-fail the whole build
-      # ("CreateBuildDirectory" abort, no clearer diagnostic). Overriding
-      # PODS_XCFRAMEWORKS_BUILD_DIR here — appending the platform name
-      # explicitly — forces the two pod targets apart regardless of whatever
-      # upstream xcconfig chain was collapsing them.
-      - name: Archive RemoteShutter for iOS device (unsigned)
+      - name: Build RemoteShutter for iOS device (unsigned)
         run: |
           xcodebuild \
             -workspace RemoteShutter.xcworkspace \
             -scheme RemoteCam \
             -configuration Release \
-            -archivePath build/RemoteShutter.xcarchive \
-            archive \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
-            'PODS_XCFRAMEWORKS_BUILD_DIR=$(PODS_CONFIGURATION_BUILD_DIR)/XCFrameworkIntermediates$(EFFECTIVE_PLATFORM_NAME)'
+            clean build
 
       # Sideloading tools expect the standard IPA shape: a zip containing a
       # top-level Payload/ folder with the .app bundle inside it. The product
-      # is named RemoteShutter.app (the scheme is named RemoteCam, the target
-      # is not). An unsigned archive's .app lives directly under
-      # Products/Applications — no -exportArchive (which needs real signing)
-      # required.
+      # is RemoteShutter.app — "RemoteCam" is the scheme name, not the target.
       - name: Package unsigned .ipa
         run: |
-          set -e
-          APP_PATH="build/RemoteShutter.xcarchive/Products/Applications/RemoteShutter.app"
+          set -euo pipefail
+          APP_PATH="build/Build/Products/Release-iphoneos/RemoteShutter.app"
           if [ ! -d "$APP_PATH" ]; then
-            echo "RemoteShutter.app not found at $APP_PATH" >&2
-            find build/RemoteShutter.xcarchive/Products -maxdepth 3
+            echo "::error::RemoteShutter.app not found at $APP_PATH" >&2
+            find build/Build/Products -maxdepth 2 || true
             exit 1
           fi
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
-          zip -r RemoteCam-unsigned.ipa Payload
+          zip -qr RemoteCam-unsigned.ipa Payload
+          ls -lh RemoteCam-unsigned.ipa
 
       - name: Upload .ipa artifact
         uses: actions/upload-artifact@v4
