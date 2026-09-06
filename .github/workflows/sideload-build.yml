@@ -1,0 +1,68 @@
+name: Sideload Build (unsigned)
+
+# Manual only: builds an UNSIGNED .ipa for a real iPhone (arm64), with no
+# Apple Developer account involved in CI at all. Sign it yourself afterwards
+# with a free Apple ID using a tool like Sideloadly (sideloadly.io) on any
+# desktop OS — Sideloadly performs the personal-team signing that Xcode would
+# normally do, so no Mac is required to get the app onto a device.
+#
+# Free-account installs expire after 7 days; re-run Sideloadly against the
+# same .ipa to re-sign and reinstall.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-unsigned-ipa:
+    name: Build unsigned .ipa
+    runs-on: macos-26
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.2'
+
+      # No provisioning profile, no signing identity — just the arm64 binary
+      # and resources. Sideloadly (or any ad-hoc resigning tool) re-signs this
+      # from scratch, so nothing here needs to be valid for on-device launch.
+      - name: Build RemoteCam for iOS device (unsigned)
+        run: |
+          xcodebuild \
+            -workspace RemoteShutter.xcworkspace \
+            -scheme RemoteCam \
+            -configuration Debug \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            clean build
+
+      # Sideloading tools expect the standard IPA shape: a zip containing a
+      # top-level Payload/ folder with the .app bundle inside it.
+      - name: Package unsigned .ipa
+        run: |
+          set -e
+          APP_PATH=$(find build/Build/Products -maxdepth 2 -iname "RemoteCam.app" -type d | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "RemoteCam.app not found under build/Build/Products" >&2
+            exit 1
+          fi
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          zip -r RemoteCam-unsigned.ipa Payload
+
+      - name: Upload .ipa artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RemoteCam-unsigned-ipa
+          path: RemoteCam-unsigned.ipa
+          retention-days: 14
