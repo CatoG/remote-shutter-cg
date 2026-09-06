@@ -33,13 +33,21 @@ jobs:
       # No provisioning profile, no signing identity — just the arm64 binary
       # and resources. Sideloadly (or any ad-hoc resigning tool) re-signs this
       # from scratch, so nothing here needs to be valid for on-device launch.
-      - name: Build RemoteCam for iOS device (unsigned)
+      # `-destination generic/platform=iOS` (not `-sdk iphoneos`) is required:
+      # the RemoteCam scheme's app target implicitly embeds RemoteShutterWatch,
+      # and an under-specified `-sdk`-only build lets Xcode's dependency
+      # resolution pull in both the iOS and watchOS variants of the
+      # VideocallCodecs pod at once, which collide writing to the same
+      # derived-data path ("duplicate output file ... VideocallCodecs.framework
+      # ... in target 'VideocallCodecs-watchOS'") and fail the build. A generic
+      # iOS destination scopes dependency resolution to iOS only.
+      - name: Build RemoteShutter for iOS device (unsigned)
         run: |
           xcodebuild \
             -workspace RemoteShutter.xcworkspace \
             -scheme RemoteCam \
             -configuration Debug \
-            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
             -derivedDataPath build \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
@@ -47,13 +55,16 @@ jobs:
             clean build
 
       # Sideloading tools expect the standard IPA shape: a zip containing a
-      # top-level Payload/ folder with the .app bundle inside it.
+      # top-level Payload/ folder with the .app bundle inside it. The product
+      # is named RemoteShutter.app (the scheme is named RemoteCam, the target
+      # is not).
       - name: Package unsigned .ipa
         run: |
           set -e
-          APP_PATH=$(find build/Build/Products -maxdepth 2 -iname "RemoteCam.app" -type d | head -1)
+          APP_PATH=$(find build/Build/Products -maxdepth 2 -iname "RemoteShutter.app" -type d | head -1)
           if [ -z "$APP_PATH" ]; then
-            echo "RemoteCam.app not found under build/Build/Products" >&2
+            echo "RemoteShutter.app not found under build/Build/Products" >&2
+            find build/Build/Products -maxdepth 2
             exit 1
           fi
           mkdir -p Payload
